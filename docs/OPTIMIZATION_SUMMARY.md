@@ -108,3 +108,15 @@ box-drift / character-error comparison over a 24-page subset and the full
 [CHANGES.md](CHANGES.md).
 The unit tests in `tests/` additionally assert the bit-exactness of the
 rewritten preprocessing and mask-refinement code without running the models.
+
+## AI contributions
+
+This performance work was developed and refined with the help of
+**DeepSeek V4 Flash**, an AI coding agent, under the direction of
+**GolyBidoof** (this fork's maintainer). The agent assisted with profiling,
+designing and implementing the optimisations (worker pipeline, beam search,
+CPU sharding, vectorised mask refinement), running the benchmark harness and
+the bit-exactness comparisons, and iterating on correctness fixes. The human
+maintainer owns the direction, the final review, and every design decision
+that trades speed against accuracy; claims that could not be reproduced were
+removed rather than kept.

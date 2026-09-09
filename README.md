@@ -187,6 +187,11 @@ git submodule); when a merge touches it, keep this repository's copy.
   [Maciej Budyś](https://github.com/kha-white).
 - This repository builds on [GolyBidoof/mokuro](https://github.com/GolyBidoof/mokuro)
   (v0.3.0b), the fork this performance work started from.
+- The optimizations were developed and refined with the help of
+  **DeepSeek V4 Flash** (an AI coding agent), under the direction of
+  **GolyBidoof** (this fork's maintainer). See
+  [docs/CHANGES.md](docs/CHANGES.md) for what was changed and how it was
+  verified.
 - Text detection: [comic-text-detector](https://github.com/dmMaze/comic-text-detector);
   OCR: [manga-ocr](https://github.com/kha-white/manga-ocr);
   text segmentation: [Manga-Text-Segmentation](https://github.com/juvian/Manga-Text-Segmentation).
