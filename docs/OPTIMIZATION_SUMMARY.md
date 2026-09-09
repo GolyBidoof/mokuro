@@ -4,8 +4,8 @@ This document describes the performance work in this fork: what was changed,
 why, and how it was verified. The goal was to keep mokuro's **exact output
 format, CLI and OCR results** while making processing several times faster on
 NVIDIA / AMD GPUs, Apple Silicon and plain CPUs. The per-change details,
-origins and knobs are in `CHANGES.md`; measured numbers are filled in from the
-benchmark results (README, "Performance").
+origins and knobs are in [CHANGES.md](CHANGES.md); measured numbers are filled
+in from the benchmark results (README, "Performance").
 
 ## Where the time went (upstream / the previous fork)
 
@@ -104,6 +104,7 @@ this repository) on four machines (RTX 4090 / Threadripper 9960X,
 RX 9070 XT / Ryzen 9 7950X, RX 6900 XT / Ryzen 7 5800X, MacBook Pro M2 Pro)
 against upstream 0.2.5 reference outputs produced on the same machine, with a
 box-drift / character-error comparison over a 24-page subset and the full
-177-page volume; the numbers are reported in the README and in `CHANGES.md`.
+177-page volume; the numbers are reported in the README and in
+[CHANGES.md](CHANGES.md).
 The unit tests in `tests/` additionally assert the bit-exactness of the
 rewritten preprocessing and mask-refinement code without running the models.

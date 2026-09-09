@@ -4,11 +4,11 @@
 your machine. Every value below is a *default*: command-line flags
 (``--num_workers``, ``--ocr_batch_size``, ``--num_beams``) and library
 arguments always take precedence over it, but if you never pass flags, the
-values chosen here (or auto-detected from your hardware) apply everywhere —
+values chosen here (or auto-detected from your hardware) apply everywhere,
 CLI and library callers alike.
 
 Every default in this file keeps the OCR output identical to upstream mokuro
-(same boxes, same text; see CHANGES.md for the exact parity statement). The
+(same boxes, same text; see docs/CHANGES.md for the exact parity statement). The
 only knobs that trade accuracy for speed are ``NUM_BEAMS`` (when set to a
 value other than the model's own 4) and ``FUSE_CONV_BN`` / ``ALLOW_CUDNN_TF32``
 (which change the detector's output slightly on CUDA); all of them are off by
@@ -16,11 +16,11 @@ default.
 
 How the work is split:
 
-* **GPU (CUDA / ROCm / MPS)** — the main process keeps the single GPU context
+* **GPU (CUDA / ROCm / MPS)**: the main process keeps the single GPU context
   (text-detector forward, OCR beam search); ``NUM_WORKERS`` CPU worker
   processes decode pages, post-process the detector output and prepare the
   OCR crops in parallel.
-* **CPU only** — the volume's pages are sharded over ``NUM_WORKERS`` model
+* **CPU only**: the volume's pages are sharded over ``NUM_WORKERS`` model
   processes (each with its own copy of the models and a share of the cores),
   which is much faster than one process using all cores.
 * Running out of memory? Lower ``NUM_WORKERS`` (each GPU-mode worker costs
@@ -35,7 +35,7 @@ import subprocess
 import torch
 
 # ===========================================================================
-# EDIT ME — per-machine tuning knobs
+# EDIT ME: per-machine tuning knobs
 # ===========================================================================
 # Set a knob to a concrete value to force it everywhere; leave it ``None`` to
 # keep the automatic, hardware-aware default (functions at the bottom of this
@@ -84,7 +84,7 @@ IMAGE_DECODER = "auto"
 
 # -- OCR decoding quality vs. speed -----------------------------------------
 # Beam width for the OCR transformer:
-#   None -> use the model's own generation config (num_beams=4 — identical
+#   None -> use the model's own generation config (num_beams=4, identical
 #           output to upstream mokuro / manga-ocr, best accuracy)
 #   1    -> greedy decoding: measured 25-28% faster on CPU, 3-9% on GPU, but
 #           ~5% of characters change (4.9% page CER) on the test volume
@@ -161,7 +161,7 @@ BEAM_SYNC_LAG = 1
 SKIP_CROSS_ATTN_CACHE_REORDER = True
 
 # ===========================================================================
-# Automatic hardware detection — usually nothing to edit below this line.
+# Automatic hardware detection: usually nothing to edit below this line.
 # ===========================================================================
 
 

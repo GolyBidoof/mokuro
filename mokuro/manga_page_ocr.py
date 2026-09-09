@@ -106,7 +106,7 @@ class MangaPageOcr:
             self.mocr = MangaOcr(pretrained_model_name_or_path, force_cpu)
 
             # OCR precision on GPUs: fp32 (default, identical to upstream) or
-            # fp16 (--fp16 / USE_FP16; faster, not exact — see config.py).
+            # fp16 (--fp16 / USE_FP16; faster, not exact, see config.py).
             if device != "cpu" and _config.USE_FP16:
                 try:
                     self.mocr.model.to(device)

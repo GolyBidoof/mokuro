@@ -141,3 +141,7 @@ tune_data/
 profile_*.py
 inspect_*.py
 dummy_*.png
+.bench-variants/
+.DS_Store
+:memory:.ses
+/君に届け 1/

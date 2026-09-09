@@ -49,12 +49,17 @@ unchanged (natsorted cache files).
 | Ryzen 9 7950X (CPU only) | CPU | 2.164 | **0.667** | 3.2x | - |
 | MacBook Pro M2 Pro 16 GB | MPS | 1.207 | **0.339** | 3.6x | 0.318 |
 | M2 Pro (CPU only) | CPU | 2.351 | **0.609** | 3.9x | - |
+| MacBook Pro M4 Pro 24 GB | MPS | 1.868 | **0.432** | 4.3x | 0.424 |
 | RX 6900 XT + Ryzen 7 5800X | ROCm | 0.718 | **0.118** | 6.1x | 0.091 |
 | Ryzen 7 5800X (CPU only) | CPU | 2.625 | **1.267** | 2.1x | - |
 
 fp32 output is byte-identical to upstream on every row. The RTX 4090 upstream
 figure uses PyTorch's default cuDNN TF32 setting; with TF32 off (the parity
 setting this fork uses) upstream runs at 0.393 s/page.
+
+The M4 Pro row was measured on a different volume (209 pages instead of 177),
+so read it as a separate datapoint rather than a direct comparison with the
+other rows.
 
 ## Optimisations
 
@@ -125,7 +130,8 @@ unless noted) and verified for identical output before being combined.
   at runtime by library callers reach the spawned worker / shard processes.
 * `comic_text_detector/` is vendored (it was a git submodule) because the
   pipeline needs edits inside it (`inference.py`, `utils/textmask.py`).
-* README / OPTIMIZATION_SUMMARY rewritten: claims of the previous version
+* README / [OPTIMIZATION_SUMMARY.md](OPTIMIZATION_SUMMARY.md) rewritten:
+  claims of the previous version
   that could not be reproduced (the M4 Pro 2.09x table, "byte-identical"
   fp16, `torch.compile` / fusion "wins") are removed; the performance numbers
   are the measured ones above.

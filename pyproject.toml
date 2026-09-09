@@ -41,10 +41,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Gnathonic/mokuro"
+Homepage = "https://github.com/GolyBidoof/mokuro"
 # Attribution: upstream mokuro and the fork this performance work builds on.
 Upstream = "https://github.com/kha-white/mokuro"
-"Based on" = "https://github.com/GolyBidoof/mokuro"
 
 [build-system]
 requires = ["setuptools >= 61.0.0", "setuptools_scm"]

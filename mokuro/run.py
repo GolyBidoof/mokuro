@@ -135,7 +135,7 @@ def run(
 
         _cfg.USE_FP16 = True
         logger.warning(
-            "fp16 OCR enabled (--fp16): faster, but not exact — a small fraction of characters may differ from fp32"
+            "fp16 OCR enabled (--fp16): faster, but not exact; a small fraction of characters may differ from fp32"
         )
 
     mg = MokuroGenerator(
