@@ -7,6 +7,8 @@ import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from mokuro import config as _config
+
 
 class InvalidImage(Exception):
     def __init__(self, message="Corrupted file or unsupported type"):
@@ -32,9 +34,27 @@ def dump_json(obj, path):
         json.dump(obj, f, ensure_ascii=False, cls=NumpyEncoder)
 
 
-def imread(path):
-    """Read an image as a BGR array. Animated images decode to their first frame."""
+def imread(path, decoder=None):
+    """Read an image as a BGR uint8 array. Animated images decode to their first frame.
+
+    ``decoder`` (default: ``config.IMAGE_DECODER``): ``"auto"`` decodes plain
+    RGB / grayscale JPEGs with cv2 (libjpeg-turbo straight to BGR, no
+    PIL->numpy->cvtColor copies; verified pixel-identical to the PIL path for
+    baseline, progressive, 4:2:0 / 4:4:4 and grayscale JPEGs), everything else
+    (PNG, WebP, AVIF, animated files, CMYK JPEGs, anything cv2 cannot open) goes
+    through PIL. ``"pil"`` forces the PIL path for every file. EXIF orientation
+    is ignored on both paths, as upstream does.
+    """
+    if decoder is None:
+        decoder = _config.IMAGE_DECODER
     try:
+        if decoder == "auto":
+            with Image.open(path) as img:
+                fast = img.format == "JPEG" and img.mode in ("RGB", "L")
+            if fast:
+                arr = cv2.imread(str(path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+                if arr is not None:
+                    return arr
         with Image.open(path) as img:
             return cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
     except (FileNotFoundError, IsADirectoryError, PermissionError):

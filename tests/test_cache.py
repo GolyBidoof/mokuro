@@ -19,9 +19,8 @@ class TestCacheInit:
     def test_root_falls_back_to_home_when_xdg_not_set(self, tmp_path):
         CacheClass = type(cache_module.cache)
         env = {k: v for k, v in os.environ.items() if k != "XDG_CACHE_HOME"}
-        with patch.dict(os.environ, env, clear=True):
-            with patch("pathlib.Path.home", return_value=tmp_path):
-                instance = CacheClass()
+        with patch.dict(os.environ, env, clear=True), patch("pathlib.Path.home", return_value=tmp_path):
+            instance = CacheClass()
         assert instance.root == tmp_path / ".cache" / "manga-ocr"
 
     def test_root_uses_xdg_cache_home_when_set(self, tmp_path):
@@ -34,9 +33,8 @@ class TestCacheInit:
         subdir = tmp_path / "cache_dir"
         CacheClass = type(cache_module.cache)
         env = {k: v for k, v in os.environ.items() if k != "XDG_CACHE_HOME"}
-        with patch.dict(os.environ, env, clear=True):
-            with patch("pathlib.Path.home", return_value=subdir):
-                instance = CacheClass()
+        with patch.dict(os.environ, env, clear=True), patch("pathlib.Path.home", return_value=subdir):
+            instance = CacheClass()
         assert instance.root.is_dir()
 
 
@@ -72,9 +70,11 @@ class TestDownloadIfNeeded:
         mock_response = MagicMock()
         mock_response.status_code = 404
 
-        with patch("mokuro.cache.requests.get", return_value=mock_response):
-            with pytest.raises(RuntimeError, match="Failed downloading"):
-                instance._download_if_needed(file_path, "http://example.com/test.pt")
+        with (
+            patch("mokuro.cache.requests.get", return_value=mock_response),
+            pytest.raises(RuntimeError, match="Failed downloading"),
+        ):
+            instance._download_if_needed(file_path, "http://example.com/test.pt")
 
 
 class TestComicTextDetector:

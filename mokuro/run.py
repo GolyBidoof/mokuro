@@ -26,6 +26,7 @@ def run(
     num_workers: int | None = None,
     ocr_batch_size: int | None = None,
     num_beams: int | None = None,
+    fp16: bool = False,
     version: bool = False,
 ):
     """
@@ -43,9 +44,12 @@ def run(
         unzip: Extract volumes in zip/cbz format in their original location.
         legacy_html: Enable legacy HTML output. If True, acts as if --unzip is True.
         as_one_file: Applies only to legacy HTML. If False, generate separate CSS and JS files instead of embedding them in the HTML file.
-        num_workers: Pages processed concurrently per chunk. Default: auto-detected from hardware (see mokuro/config.py).
+        num_workers: Number of worker processes. On a GPU: CPU-side pipeline workers (decode, post-processing, crops);
+            on CPU only: model shard processes. 0 = single process. Default: auto-detected (see mokuro/config.py).
         ocr_batch_size: Text-line crops per batched OCR call. Default: auto-detected from hardware.
-        num_beams: Beam width for OCR decoding. Default: model default (4, highest quality). Use 1 for faster greedy decoding.
+        fp16: Run the OCR model in half precision on CUDA/ROCm/MPS (1.07x-4.9x faster depending on the GPU; not exact: changes 0.19% of characters on ~2.6% of pages of a 140-volume set, see README "Precision policy"; boxes unaffected). Default: fp32, identical to upstream.
+        num_beams: Beam width for OCR decoding. Default: model default (4, identical output to upstream).
+            Other values (e.g. 1 = greedy) are faster but change the OCR text; see mokuro/config.py.
         version: Print the version of mokuro and exit.
     """
 
@@ -66,6 +70,11 @@ def run(
         unzip = True
 
     logger.info("Scanning paths...")
+
+    if isinstance(fp16, str):
+        # python-fire parses "--fp16 <path>" as fp16="<path>"; keep the path and treat the flag as set.
+        paths = (fp16, *paths)
+        fp16 = True
 
     paths_ = []
     for path in paths:
@@ -121,6 +130,14 @@ def run(
         if inp.lower() not in ("y", "yes"):
             return
 
+    if fp16:
+        from mokuro import config as _cfg
+
+        _cfg.USE_FP16 = True
+        logger.warning(
+            "fp16 OCR enabled (--fp16): faster, but not exact — a small fraction of characters may differ from fp32"
+        )
+
     mg = MokuroGenerator(
         pretrained_model_name_or_path=pretrained_model_name_or_path,
         force_cpu=force_cpu,
@@ -139,19 +156,22 @@ def run(
             tmp_dir = None
 
         num_sucessful = 0
-        for i, volume in enumerate(vc):
-            logger.info(f"Processing {i + 1}/{len(vc)}: {volume.path_in}")
+        try:
+            for i, volume in enumerate(vc):
+                logger.info(f"Processing {i + 1}/{len(vc)}: {volume.path_in}")
 
-            try:
-                volume.unzip(tmp_dir)
-                mg.process_volume(volume, ignore_errors=ignore_errors, no_cache=no_cache)
-                if legacy_html:
-                    generate_legacy_html(volume, as_one_file=as_one_file, ignore_errors=ignore_errors)
+                try:
+                    volume.unzip(tmp_dir)
+                    mg.process_volume(volume, ignore_errors=ignore_errors, no_cache=no_cache)
+                    if legacy_html:
+                        generate_legacy_html(volume, as_one_file=as_one_file, ignore_errors=ignore_errors)
 
-            except Exception:
-                logger.exception(f"Error while processing {volume.path_in}")
-            else:
-                num_sucessful += 1
+                except Exception:  # noqa: BLE001 - logged with traceback; continue with the next volume
+                    logger.exception(f"Error while processing {volume.path_in}")
+                else:
+                    num_sucessful += 1
+        finally:
+            mg.close()
 
         logger.info(f"Processed successfully: {num_sucessful}/{len(vc)}")
 

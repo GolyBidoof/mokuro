@@ -1,10 +1,11 @@
 import uuid
 from enum import Enum, auto
+from typing import ClassVar
 
 from loguru import logger
 from natsort import natsorted
 
-from mokuro.utils import get_path_format, load_json, dump_json, unzip
+from mokuro.utils import dump_json, get_path_format, load_json, unzip
 
 
 class VolumeStatus(Enum):
@@ -61,7 +62,7 @@ class Title:
 
 
 class Volume:
-    format_preference_order = ["", ".cbz", ".zip"]
+    format_preference_order: ClassVar[list[str]] = ["", ".cbz", ".zip"]
 
     def __init__(self, path_in):
         self.paths_in = {path_in}

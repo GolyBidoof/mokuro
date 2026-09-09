@@ -1,113 +1,109 @@
 # Mokuro Optimization Summary
 
 This document describes the performance work in this fork: what was changed,
-why, and the measured results. The goal was to keep mokuro's **exact output
-format and CLI** while making OCR substantially faster on Apple Silicon,
-NVIDIA GPUs and plain CPUs.
+why, and how it was verified. The goal was to keep mokuro's **exact output
+format, CLI and OCR results** while making processing several times faster on
+NVIDIA / AMD GPUs, Apple Silicon and plain CPUs. The per-change details,
+origins and knobs are in `CHANGES.md`; measured numbers are filled in from the
+benchmark results (README, "Performance").
 
-## Measured results
+## Where the time went (upstream / the previous fork)
 
-Benchmark: a **187-page tankōbon** (typical single volume), **cold OCR cache**,
-identical dependencies, on an **Apple Silicon (M4 Pro)** machine. Each number
-is the mean of two alternating runs under the same system load; every run
-generated all 187 per-page OCR files successfully.
-
-| Variant | Total time | Time/page | vs. upstream |
-|:---|:---|:---|:---|
-| Upstream mokuro 0.2.5 | 362.2 s | 1.94 s | — |
-| **This fork (0.3.0b)** ⭐ | **173.0 s** | **0.92 s** | **2.09× faster** |
-
-Key findings:
-
-- The fork processes the same volume in **less than half the time** with
-  **identical OCR output** (verified by the test suite and byte-level crop
-  parity with manga-ocr).
-- The gains come from **batched OCR inference**, **concurrent page loading**
-  and **fp16 on GPU** — no accuracy trade-off.
-- Earlier tuning runs (December 2025) on the same hardware showed CPU-only
-  mode at ~0.71 s/page vs ~0.46 s/page with MPS — **MPS is ~55% faster than
-  CPU-only** on Apple Silicon.
+Profiling the previous version of this fork on a 177-page volume showed that
+on a fast GPU **more than half of the wall time was single-threaded CPU
+work** serialised with the GPU: text-mask refinement (47-56%), JPEG decode
+(11-17%), detector post-processing and OCR preprocessing. The GPU itself was
+idle most of the time. On CPU-only machines the OCR transformer's beam search
+dominated (~70%), and most of that was transformers' per-step Python glue
+rather than the model's arithmetic.
 
 ## What changed
 
-### 1. Batched OCR inference (`mokuro/manga_page_ocr.py`)
+### 1. Worker-process page pipeline (`mokuro/pipeline.py`, `mokuro/page_ops.py`, `mokuro/mokuro_generator.py`)
 
-Upstream calls the OCR model once **per text line** (`model.generate` per
-crop). This fork splits the pipeline into `detect_and_extract()` (detect
-blocks + collect line crops) and `recognize_text()` (one `generate()` call
-per `batch_size` crops). On GPUs this amortizes launch overhead; on CPU it
-reduces per-call interpreter overhead. Preprocessing is byte-identical to
-manga-ocr's `__call__` (grayscale → RGB), so **OCR output is unchanged**.
+The per-page work is split into pure functions (`page_ops`) that run in
+spawned worker processes: image decode + letterbox, DB polygon extraction,
+`group_output`, mask refinement, text-line crop extraction and OCR
+preprocessing. The main process only runs the detector forward + NMS and the
+OCR beam search. Tensors cross the process boundary through shared memory.
+OCR batches are fixed-size and formed strictly in page order, so the result is
+independent of scheduling and of the worker count. Failures are handled per
+page.
 
-### 2. Concurrent page loading (`mokuro/mokuro_generator.py`)
+### 2. Lazy, faster text-mask refinement (`page_ops`, `comic_text_detector/utils/textmask.py`)
 
-Pages are processed in chunks (`OCR_CHUNK_SIZE`, default 8). Images are
-decoded with a small thread pool (up to 4 threads) before detection, hiding
-disk I/O latency behind compute.
+The refined mask is only consumed when a text line is longer than
+`max_ratio` and has to be split into chunks - a small fraction of pages. It is
+now computed lazily at page level (identical output: the block list is built
+before refinement and nothing else reads the refined mask). The refinement
+code itself was rewritten with vectorised numpy (`np.bincount` component
+merging, closed-form colour selection), verified bit-identical on every page
+of the test volume.
 
-### 3. Hardware-aware defaults (`mokuro/config.py`)
+### 3. Hand-rolled beam search (`mokuro/beam.py`)
 
-New central config that auto-detects the device and picks good defaults:
+A beam search that replicates transformers' `_beam_search` token for token for
+the model's own generation config (4 beams, no-repeat-ngram 3, length penalty
+2.0, early stopping), calling the model's own modules with the same shapes -
+so the numerics are the same kernels - but with a static, in-place KV cache
+and cross-attention K/V projected once per crop and shared across beams. On
+CPU this removes most of the decoder's overhead. Non-default decoding
+settings automatically fall back to `generate()`, where the (also exact)
+cross-attention cache-reorder skip applies.
 
-| Setting | Apple Silicon | NVIDIA (CUDA) | CPU only |
-|:---|:---|:---|:---|
-| Num workers | 8 | 4 | cores / 2 |
-| OCR batch size | 64 | 32 | 16 |
-| Precision | fp16 | fp16 | fp32 |
-| Beams | model default (4) | model default (4) | model default (4) |
+### 4. CPU-only sharding (`mokuro/cpu_shards.py`)
 
-Every value is a default — CLI flags (`--num_workers`, `--ocr_batch_size`,
-`--num_beams`) and library arguments always override it.
+One model process per L3 cache domain (CCD), pinned to its cores, pulling
+one-page jobs from a queue. Each shard runs the same pipeline driver as the
+GPU path. Measured ~1.5-1.6x over one process with all cores on a 7950X and a
+9960X; fewer, fatter processes aligned to the cache domains beat every other
+split. The detector additionally runs in `channels_last` on CPU (~2x on its
+forward pass).
 
-### 4. GPU-friendly model tweaks (`mokuro/manga_page_ocr.py`)
+### 5. Batched OCR with larger batches, single-plane preprocessing, cv2 decode, transfer micro-wins
 
-- **conv+bn fusion** on the text detector (folds batch-norm into conv at
-  load time — free inference speedup, no output change).
-- **fp16** for the OCR transformer on CUDA/MPS (negligible accuracy impact).
-- **`torch.compile`** for the detector net and OCR encoder on CUDA.
-- **`torch.inference_mode()`** for the batched OCR pass (slightly cheaper than
-  the default on modern PyTorch).
+- OCR batch size 128 on CUDA/ROCm (64 MPS, 32 CPU); the batch composition is
+  page-ordered and continuous across the volume (no ragged batches).
+- OCR crops are grayscale: the single luma plane is resized with the same
+  torchvision call the stock processor uses and expanded on the device
+  (`torch.equal` to the stock pixel values).
+- Plain JPEGs are decoded by cv2 (pixel-identical to PIL).
+- The detector's redundant BGR<->RGB conversions are dropped, the input is
+  uploaded as uint8 and normalised on the GPU with a correctly rounded
+  division, and the mask is converted to uint8 before the copy back.
+- OCR precision: fp32 by default (byte-identical to upstream). `--fp16`
+  (`USE_FP16`) is the only opt-in precision mode: 1.6x (RTX 4090) to 4.9x
+  (RX 9070 XT) faster but not exact: on 140 volumes / 2.52 M characters it
+  changes 0.19% of the characters on 26 pages per 1000, boxes never
+  (README, "Precision policy").
 
-### 5. Small correctness & hygiene fixes
+### 6. Correctness fixes over the previous fork
 
-- `Volume.get_ocr_path()` helper centralizes the `_ocr/<stem>/<rel>.json`
-  path logic.
-- Gaussian window used for long-line splitting is **cached** (it only depends
-  on `text_height`).
-- Degenerate line geometry (zero-size crops, overflow in
-  `get_transformed_region`) is **skipped** instead of crashing the volume.
-- `generate_mokuro_file()` skips cached OCR entries that have no matching
-  image, instead of raising.
-- Moved to upstream v0.2.5 base (fork version 0.3.0b): **AVIF support**, XDG
-  cache location, `pkg_resources` removal, Python ≥3.10, robust PIL-based
-  image loading.
+- `torch.compile` (crashed on current torch, and slower than eager when
+  fixed) and conv+bn fusion (changed detector boxes on CUDA, no speed gain)
+  are off; cuDNN TF32 is off on CUDA so GPU and CPU results agree.
+- `--force_cpu` is honoured by the automatic defaults.
+- `--ignore_errors` skips exactly the failing page (no empty cache files for
+  the rest of a chunk); a broken image no longer aborts the volume.
+- Models are not loaded for fully cached volumes.
 
-## Files touched vs. upstream
+## What was tried and rejected
 
-| File | Change |
-|:---|:---|
-| `mokuro/config.py` | **new** — easy-to-edit hardware defaults |
-| `mokuro/manga_page_ocr.py` | batched OCR, fp16, fusion, torch.compile, gaussian cache, safe splitting |
-| `mokuro/mokuro_generator.py` | chunked + threaded processing, batched OCR, `num_workers`/`ocr_batch_size`/`num_beams` |
-| `mokuro/run.py` | new CLI flags `--num_workers`, `--ocr_batch_size`, `--num_beams` |
-| `mokuro/volume.py` | `get_ocr_path()` helper |
-| `comic_text_detector/inference.py` | `no_grad()` → `inference_mode()` (submodule) |
-| `README.md` | fork docs: improvements, config, benchmarks, credits |
+- `torch.compile` in every mode (default, reduce-overhead, max-autotune) on an
+  RTX 4090 and an RX 9070 XT: slower than eager.
+- ROCm runtime knobs (TunableOp, hipBLASLt, MIOpen find modes): within noise.
+- Detector fp16 autocast: 4-7% of boxes drift on CUDA/ROCm.
+- Greedy / 2-beam decoding (3-5% CER), on-device OCR preprocessing
+  (0.3-0.4% CER), the manga-ocr-2025 model (net accuracy loss): all excluded
+  from the defaults because they change the OCR text.
 
-## How to benchmark your own machine
+## Verification
 
-```bash
-python mokuro/benchmark_mokuro.py /path/to/manga-volume results.json
-```
-
-The script runs a fixed suite (baseline vs. several optimized configurations)
-and prints a comparison table. See `mokuro/benchmark_mokuro.py`.
-
-## Compatibility
-
-- **Apple Silicon (M1–M4)**: full MPS acceleration, fp16, auto-tuned defaults.
-- **NVIDIA (CUDA)**: fp16 + conv-bn fusion + `torch.compile`, auto-tuned defaults.
-- **CPU only**: batched inference with modest thread count; graceful fallback.
-
-**Developed**: December 2025, refreshed for the v0.2.5 rebase (fork v0.3.0b).
-**Optimization work**: led by GolyBidoof with the help of **DeepSeek V4 Flash**.
+Every change was benchmarked with an external benchmark harness (not part of
+this repository) on four machines (RTX 4090 / Threadripper 9960X,
+RX 9070 XT / Ryzen 9 7950X, RX 6900 XT / Ryzen 7 5800X, MacBook Pro M2 Pro)
+against upstream 0.2.5 reference outputs produced on the same machine, with a
+box-drift / character-error comparison over a 24-page subset and the full
+177-page volume; the numbers are reported in the README and in `CHANGES.md`.
+The unit tests in `tests/` additionally assert the bit-exactness of the
+rewritten preprocessing and mask-refinement code without running the models.
