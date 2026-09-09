@@ -129,19 +129,3 @@ dmypy.json
 .pyre/
 
 .idea/
-
-# ── mokuro fork: local OCR artifacts ─────────────────────────────────────
-_ocr/
-_ocr_*/
-*.mokuro
-
-# ── mokuro fork: benchmark / tuning scratch (re-run, don't commit) ───────
-benchmark_data/
-tune_data/
-profile_*.py
-inspect_*.py
-dummy_*.png
-.bench-variants/
-.DS_Store
-:memory:.ses
-/君に届け 1/
