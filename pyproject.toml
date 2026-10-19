@@ -15,7 +15,7 @@ dynamic = ["version"]
 dependencies = [
     "fire",
     "loguru",
-    "manga-ocr>=0.1.7",
+    "manga-ocr>=0.1.17",
     "natsort",
     "numpy",
     "opencv-python>=4.1.2",
