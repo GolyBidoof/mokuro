@@ -7,6 +7,9 @@ from tqdm import tqdm
 
 from mokuro import __version__
 from mokuro.config import (
+    CPU_CHUNK_PAGES,
+    CPU_PIN_CORES,
+    CPU_THREADS_PER_PROCESS,
     PIPELINE_MAX_INFLIGHT,
     get_default_num_workers,
     get_default_ocr_batch_size,
@@ -207,16 +210,28 @@ class MokuroGenerator:
         self.disable_ocr = disable_ocr
         self.device = get_device(force_cpu)
 
-        # num_workers = number of CPU-side pipeline worker processes
-        # (0/1 = everything in the caller's process).
+        # num_workers = number of worker processes: CPU-side pipeline workers
+        # on a GPU, model shard processes on CPU (0/1 = single process).
         # None -> auto (see mokuro/config.py).
         self.num_workers = num_workers if num_workers is not None else get_default_num_workers(force_cpu)
         self.ocr_batch_size = ocr_batch_size if ocr_batch_size is not None else get_default_ocr_batch_size(force_cpu)
         self.max_inflight = max_inflight if max_inflight is not None else PIPELINE_MAX_INFLIGHT
 
+        # CPU-only sharding knobs (see mokuro/config.py); library callers may
+        # override them per instance via kwargs.
+        cpu_threads = kwargs.pop("cpu_threads", None)
+        self.cpu_threads = int(cpu_threads) if cpu_threads is not None else CPU_THREADS_PER_PROCESS
+        self.cpu_chunk_pages = int(kwargs.pop("cpu_chunk_pages", None) or CPU_CHUNK_PAGES)
+        cpu_pin = kwargs.pop("cpu_pin", None)
+        self.cpu_pin = bool(CPU_PIN_CORES if cpu_pin is None else cpu_pin)
+
         self.kwargs = kwargs  # num_beams, fp16 + MangaPageOcr kwargs
         self.mpocr = None
         self.pool = None
+        self.shard_pool = None
+
+    def _use_shards(self):
+        return self.device == "cpu" and not self.disable_ocr and self.num_workers > 1
 
     def _mpocr_kwargs(self):
         # num_beams is consumed by the decoding call, not by MangaPageOcr's constructor
@@ -226,6 +241,23 @@ class MokuroGenerator:
         """Load the models (and start the worker processes). Called lazily by
         ``process_volume`` for the first volume that has uncached pages."""
         if self.disable_ocr:
+            return
+        if self._use_shards():
+            if self.shard_pool is None:
+                from mokuro.cpu_shards import ShardPool
+
+                self.shard_pool = ShardPool(
+                    self.num_workers,
+                    self.cpu_threads,
+                    self.cpu_pin,
+                    {
+                        "pretrained_model_name_or_path": self.pretrained_model_name_or_path,
+                        "force_cpu": True,
+                        "disable_ocr": False,
+                        **self._mpocr_kwargs(),
+                    },
+                    {"ocr_batch_size": self.ocr_batch_size, "num_beams": self.kwargs.get("num_beams")},
+                )
             return
         if self.mpocr is None:
             self.mpocr = MangaPageOcr(
@@ -249,6 +281,9 @@ class MokuroGenerator:
         if self.pool is not None:
             self.pool.close()
             self.pool = None
+        if self.shard_pool is not None:
+            self.shard_pool.close()
+            self.shard_pool = None
 
     def __del__(self):
         try:  # __del__ must never raise; at interpreter shutdown module globals may already be None
@@ -299,18 +334,28 @@ class MokuroGenerator:
                 # something to do: a fully cached volume costs no model init.
                 self.init_models()
                 try:
-                    process_pages(
-                        self.mpocr,
-                        self.pool,
-                        volume.path_in,
-                        volume.path_ocr_cache,
-                        to_process,
-                        self.ocr_batch_size,
-                        self.mpocr.generation_kwargs(num_beams=self.kwargs.get("num_beams")),
-                        ignore_errors=ignore_errors,
-                        max_inflight=self.max_inflight,
-                        on_page_done=pbar.update,
-                    )
+                    if self.shard_pool is not None:
+                        self.shard_pool.run(
+                            volume.path_in,
+                            volume.path_ocr_cache,
+                            to_process,
+                            self.cpu_chunk_pages,
+                            ignore_errors,
+                            on_done=pbar.update,
+                        )
+                    else:
+                        process_pages(
+                            self.mpocr,
+                            self.pool,
+                            volume.path_in,
+                            volume.path_ocr_cache,
+                            to_process,
+                            self.ocr_batch_size,
+                            self.mpocr.generation_kwargs(num_beams=self.kwargs.get("num_beams")),
+                            ignore_errors=ignore_errors,
+                            max_inflight=self.max_inflight,
+                            on_page_done=pbar.update,
+                        )
                 except BaseException:
                     # In-flight worker results would leak into the next
                     # volume: drop the pools, init_models() rebuilds them.
