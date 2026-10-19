@@ -66,7 +66,7 @@ def generate_legacy_html(volume: Volume, as_one_file=True, is_demo=False, ignore
             if ignore_errors:
                 logger.error(e)
             else:
-                raise e
+                raise
 
     if is_demo:
         html_title = f"mokuro {__version__} demo"
