@@ -1,10 +1,11 @@
 import uuid
 from enum import Enum, auto
+from typing import ClassVar
 
 from loguru import logger
 from natsort import natsorted
 
-from mokuro.utils import get_path_format, load_json, dump_json, unzip
+from mokuro.utils import dump_json, get_path_format, load_json, unzip
 
 
 class VolumeStatus(Enum):
@@ -61,7 +62,7 @@ class Title:
 
 
 class Volume:
-    format_preference_order = ["", ".cbz", ".zip"]
+    format_preference_order: ClassVar[list[str]] = ["", ".cbz", ".zip"]
 
     def __init__(self, path_in):
         self.paths_in = {path_in}
@@ -91,6 +92,10 @@ class Volume:
     @property
     def path_ocr_cache(self):
         return self.path_mokuro.parent / "_ocr" / self.path_mokuro.stem
+
+    def get_ocr_path(self, img_path_rel):
+        """Path to the cached OCR JSON for a page image (mirrors upstream layout)."""
+        return (self.path_ocr_cache / img_path_rel).with_suffix(".json")
 
     @property
     def path_title(self):
