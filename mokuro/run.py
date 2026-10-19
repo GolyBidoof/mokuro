@@ -1,20 +1,19 @@
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Sequence, Optional, Union
 
 import fire
 from loguru import logger
 
-from mokuro import MokuroGenerator
-from mokuro import __version__
+from mokuro import MokuroGenerator, __version__
 from mokuro.legacy.overlay_generator import generate_legacy_html
 from mokuro.volume import VolumeCollection
 
 
 def run(
-    *paths: Optional[Sequence[Union[str, Path]]],
-    parent_dir: Optional[Union[str, Path]] = None,
+    *paths: Sequence[str | Path] | None,
+    parent_dir: str | Path | None = None,
     pretrained_model_name_or_path: str = "kha-white/manga-ocr-base",
     force_cpu: bool = False,
     disable_confirmation: bool = False,
@@ -24,6 +23,10 @@ def run(
     unzip: bool = False,
     legacy_html: bool = True,
     as_one_file: bool = True,
+    num_workers: int | None = None,
+    ocr_batch_size: int | None = None,
+    num_beams: int | None = None,
+    fp16: bool = False,
     version: bool = False,
 ):
     """
@@ -33,7 +36,7 @@ def run(
         paths: Paths to manga volumes. Volume can be a directory, a zip file or a cbz file.
         parent_dir: Parent directory to scan for volumes. If provided, all volumes inside this directory will be processed.
         pretrained_model_name_or_path: Name or path of the manga-ocr model.
-        force_cpu: Force the use of CPU even if CUDA is available.
+        force_cpu: Force the use of CPU even if CUDA/MPS is available.
         disable_confirmation: Disable confirmation prompt. If False, the user will be prompted to confirm the list of volumes to be processed.
         disable_ocr: Disable OCR processing. Generate mokuro/HTML files without OCR results.
         ignore_errors: Continue processing volumes even if an error occurs.
@@ -41,6 +44,12 @@ def run(
         unzip: Extract volumes in zip/cbz format in their original location.
         legacy_html: Enable legacy HTML output. If True, acts as if --unzip is True.
         as_one_file: Applies only to legacy HTML. If False, generate separate CSS and JS files instead of embedding them in the HTML file.
+        num_workers: Number of worker processes. On a GPU: CPU-side pipeline workers (decode, post-processing, crops);
+            on CPU only: model shard processes. 0 = single process. Default: auto-detected (see mokuro/config.py).
+        ocr_batch_size: Text-line crops per batched OCR call. Default: auto-detected from hardware.
+        fp16: Run the OCR model in half precision on CUDA/ROCm/MPS (manga-ocr's ``fp16`` mode; faster, but not exact: changes 0.19% of characters on ~2.6% of pages of a 140-volume set, see README "Precision policy"; boxes unaffected). Default: fp32, identical to upstream.
+        num_beams: Beam width for OCR decoding, forwarded to manga-ocr. Default: model default (4, identical output to upstream).
+            Other values (e.g. 1 = greedy) are faster but change the OCR text; see mokuro/config.py.
         version: Print the version of mokuro and exit.
     """
 
@@ -61,6 +70,11 @@ def run(
         unzip = True
 
     logger.info("Scanning paths...")
+
+    if isinstance(fp16, str):
+        # python-fire parses "--fp16 <path>" as fp16="<path>"; keep the path and treat the flag as set.
+        paths = (fp16, *paths)
+        fp16 = True
 
     paths_ = []
     for path in paths:
@@ -116,8 +130,20 @@ def run(
         if inp.lower() not in ("y", "yes"):
             return
 
+    if fp16:
+        logger.warning(
+            "fp16 OCR enabled (--fp16): faster, but not exact; a small fraction of characters may differ from fp32"
+        )
+
     mg = MokuroGenerator(
-        pretrained_model_name_or_path=pretrained_model_name_or_path, force_cpu=force_cpu, disable_ocr=disable_ocr
+        pretrained_model_name_or_path=pretrained_model_name_or_path,
+        force_cpu=force_cpu,
+        disable_ocr=disable_ocr,
+        num_workers=num_workers,
+        ocr_batch_size=ocr_batch_size,
+        num_beams=num_beams,
+        # None keeps the mokuro/config.py default (USE_FP16)
+        fp16=fp16 or None,
     )
 
     with TemporaryDirectory() as tmp_dir:
@@ -129,19 +155,22 @@ def run(
             tmp_dir = None
 
         num_sucessful = 0
-        for i, volume in enumerate(vc):
-            logger.info(f"Processing {i + 1}/{len(vc)}: {volume.path_in}")
+        try:
+            for i, volume in enumerate(vc):
+                logger.info(f"Processing {i + 1}/{len(vc)}: {volume.path_in}")
 
-            try:
-                volume.unzip(tmp_dir)
-                mg.process_volume(volume, ignore_errors=ignore_errors, no_cache=no_cache)
-                if legacy_html:
-                    generate_legacy_html(volume, as_one_file=as_one_file, ignore_errors=ignore_errors)
+                try:
+                    volume.unzip(tmp_dir)
+                    mg.process_volume(volume, ignore_errors=ignore_errors, no_cache=no_cache)
+                    if legacy_html:
+                        generate_legacy_html(volume, as_one_file=as_one_file, ignore_errors=ignore_errors)
 
-            except Exception:
-                logger.exception(f"Error while processing {volume.path_in}")
-            else:
-                num_sucessful += 1
+                except Exception:  # noqa: BLE001 - logged with traceback; continue with the next volume
+                    logger.exception(f"Error while processing {volume.path_in}")
+                else:
+                    num_sucessful += 1
+        finally:
+            mg.close()
 
         logger.info(f"Processed successfully: {num_sucessful}/{len(vc)}")
 
